@@ -20,6 +20,8 @@ const TOOL_IDS = [
   "github_list_issues",
   "github_create_issue",
   "github_create_repo",
+  "places_search",
+  "places_detail",
 ];
 
 export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected, githubScopes }: Props) {

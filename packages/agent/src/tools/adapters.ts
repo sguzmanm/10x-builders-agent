@@ -232,7 +232,132 @@ export function buildLangChainTools(ctx: ToolContext) {
     );
   }
 
+  console.log("Places API is available", isToolAvailable("places_search", ctx));
+
+  if (isToolAvailable("places_search", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "places_search", input, false
+          );
+          try {
+            const res = await placesApi("/places:searchText", {
+              method: "POST",
+              fieldMask: "places.id,places.displayName,places.formattedAddress,places.rating,places.googleMapsUri",
+              body: JSON.stringify({
+                textQuery: input.query,
+                languageCode: input.language,
+                pageSize: input.max_results,
+              }),
+            });
+
+            if (!res.ok) {
+              const err = { error: `Places API error: ${res.status}` };
+              await updateToolCallStatus(ctx.db, record.id, "failed", err);
+              return JSON.stringify(err);
+            }
+
+            const data = await res.json();
+            const places = (data.places ?? []).map((p: Record<string, unknown>) => ({
+              id: p.id,
+              name: (p.displayName as Record<string, unknown>)?.text,
+              address: p.formattedAddress,
+              rating: p.rating,
+              maps_url: p.googleMapsUri,
+            }));
+            const result = { places };
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            console.log("Places API result", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = { error: e instanceof Error ? e.message : "Unknown error" };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+        },
+        {
+          name: "places_search",
+          description: "Searches for places matching a text query and returns names, addresses, and ratings.",
+          schema: z.object({
+            query: z.string(),
+            language: z.string().nullable().optional().default("es"),
+            max_results: z.number().min(1).max(20).nullable().optional().default(5),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("places_detail", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "places_detail", input, false
+          );
+          try {
+            const res = await placesApi(`/places/${input.place_id}`, {
+              fieldMask: "id,displayName,formattedAddress,rating,userRatingCount,types,nationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,editorialSummary",
+              body: undefined,
+            });
+            if (!res.ok) {
+              const err = { error: `Places API error: ${res.status}` };
+              await updateToolCallStatus(ctx.db, record.id, "failed", err);
+              return JSON.stringify(err);
+            }
+            const p = await res.json();
+            const result = {
+              id: p.id,
+              name: p.displayName?.text,
+              address: p.formattedAddress,
+              rating: p.rating,
+              total_ratings: p.userRatingCount,
+              phone: p.nationalPhoneNumber,
+              website: p.websiteUri,
+              maps_url: p.googleMapsUri,
+              types: p.types,
+              hours: p.regularOpeningHours?.weekdayDescriptions?.join(", "),
+              summary: p.editorialSummary?.text,
+            };
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = { error: e instanceof Error ? e.message : "Unknown error" };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+        },
+        {
+          name: "places_detail",
+          description: "Returns detailed information about a place by its ID, including description and a Google Maps link.",
+          schema: z.object({
+            place_id: z.string(),
+            language: z.string().nullable().optional().default("es"),
+          }),
+        }
+      )
+    );
+  }
+
   return tools;
+}
+
+const PLACES_API = "https://places.googleapis.com/v1";
+
+function placesApi(path: string, opts: { method?: string; body?: string; fieldMask: string }) {
+  console.log("Calling Places API");
+  const key = process.env.GOOGLE_MAPS_API_KEY;
+  if (!key) throw new Error("GOOGLE_MAPS_API_KEY not set");
+  return fetch(`${PLACES_API}${path}`, {
+    method: opts.method ?? "GET",
+    headers: {
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": opts.fieldMask,
+      "Content-Type": "application/json",
+    },
+    ...(opts.body ? { body: opts.body } : {}),
+  });
 }
 
 const GITHUB_API = "https://api.github.com";

@@ -78,6 +78,35 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["name"],
     },
   },
+  {
+    id: "places_search",
+    name: "places_search",
+    description: "Searches for places matching a text query and returns names, addresses, and ratings.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Free-text search query" },
+        language: { type: "string", description: "Language code (default: es)" },
+        max_results: { type: "number", description: "Max results 1-20 (default: 5)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    id: "places_detail",
+    name: "places_detail",
+    description: "Returns detailed information about a place by its ID, including description and a Google Maps link.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        place_id: { type: "string", description: "Google Place ID from places_search" },
+        language: { type: "string", description: "Language code (default: es)" },
+      },
+      required: ["place_id"],
+    },
+  },
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {
