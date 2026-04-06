@@ -8,6 +8,11 @@ interface Message {
   created_at?: string;
 }
 
+interface PendingConfirmation {
+  tool_call_id: string;
+  message: string;
+}
+
 interface Props {
   agentName: string;
   initialMessages: Message[];
@@ -17,6 +22,8 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState<PendingConfirmation | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,13 +57,10 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
       }
 
       if (data.pendingConfirmation) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `Se requiere confirmación: ${data.pendingConfirmation.message}\n\n¿Deseas proceder?`,
-          },
-        ]);
+        setPending({
+          tool_call_id: data.pendingConfirmation.tool_call_id,
+          message: data.pendingConfirmation.message,
+        });
       }
     } catch {
       setMessages((prev) => [
@@ -68,6 +72,44 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
     }
   }
 
+  async function handleConfirm(action: "approve" | "reject") {
+    if (!pending) return;
+    setConfirming(true);
+
+    try {
+      const res = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toolCallId: pending.tool_call_id, action }),
+      });
+
+      const data = await res.json();
+
+      if (action === "reject") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "Acción cancelada." },
+        ]);
+      } else if (data.result) {
+        const resultMsg = data.result.error
+          ? `Error: ${data.result.error}`
+          : data.result.message ?? "Acción ejecutada correctamente.";
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: resultMsg },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Error procesando la confirmación." },
+      ]);
+    } finally {
+      setPending(null);
+      setConfirming(false);
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col">
       {/* Messages */}
@@ -76,7 +118,7 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
           {messages.length === 0 && (
             <div className="text-center text-sm text-neutral-400 py-20">
               <p className="text-lg font-medium text-neutral-600 dark:text-neutral-300">
-                ¡Hola! Soy {agentName}
+                Hola! Soy {agentName}
               </p>
               <p className="mt-1">Escribe un mensaje para comenzar.</p>
             </div>
@@ -97,6 +139,34 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
               </div>
             </div>
           ))}
+
+          {pending && (
+            <div className="flex justify-start">
+              <div className="max-w-[80%] rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700 dark:bg-amber-900/20">
+                <p className="font-medium text-amber-800 dark:text-amber-200 mb-2">
+                  Se requiere confirmación
+                </p>
+                <p className="text-amber-700 dark:text-amber-300 mb-3">{pending.message}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleConfirm("approve")}
+                    disabled={confirming}
+                    className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {confirming ? "Ejecutando..." : "Aprobar"}
+                  </button>
+                  <button
+                    onClick={() => handleConfirm("reject")}
+                    disabled={confirming}
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {loading && (
             <div className="flex justify-start">
               <div className="rounded-lg bg-neutral-100 px-4 py-2.5 text-sm dark:bg-neutral-800">
@@ -119,12 +189,12 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Escribe tu mensaje..."
-            disabled={loading}
+            disabled={loading || !!pending}
             className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900"
           />
           <button
             type="submit"
-            disabled={loading || !input.trim()}
+            disabled={loading || !input.trim() || !!pending}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             Enviar

@@ -5,6 +5,8 @@ import { LoginForm } from "./login-form";
 export default async function LoginPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+
+  console.log("user", user);
   if (user) redirect("/");
 
   return (

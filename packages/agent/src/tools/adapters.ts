@@ -11,6 +11,7 @@ interface ToolContext {
   sessionId: string;
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
+  githubToken?: string;
 }
 
 function isToolAvailable(
@@ -80,7 +81,26 @@ export function buildLangChainTools(ctx: ToolContext) {
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_list_repos", input, false
           );
-          const result = { message: "GitHub repos would be listed here (stub)", repos: [] };
+          if (!ctx.githubToken) {
+            const err = { error: "GitHub not connected. Please connect GitHub from Settings." };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const res = await githubApi(ctx.githubToken, `/user/repos?per_page=${input.per_page}&sort=updated`);
+          if (!res.ok) {
+            const err = { error: `GitHub API error: ${res.status}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const repos = (await res.json()).map((r: Record<string, unknown>) => ({
+            full_name: r.full_name,
+            description: r.description,
+            html_url: r.html_url,
+            private: r.private,
+            language: r.language,
+            updated_at: r.updated_at,
+          }));
+          const result = { repos };
           await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
@@ -102,7 +122,25 @@ export function buildLangChainTools(ctx: ToolContext) {
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_list_issues", input, false
           );
-          const result = { message: `Issues for ${input.owner}/${input.repo} (stub)`, issues: [] };
+          if (!ctx.githubToken) {
+            const err = { error: "GitHub not connected. Please connect GitHub from Settings." };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const res = await githubApi(ctx.githubToken, `/repos/${input.owner}/${input.repo}/issues?state=${input.state}`);
+          if (!res.ok) {
+            const err = { error: `GitHub API error: ${res.status}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const issues = (await res.json()).map((i: Record<string, unknown>) => ({
+            number: i.number,
+            title: i.title,
+            state: i.state,
+            html_url: i.html_url,
+            created_at: i.created_at,
+          }));
+          const result = { issues };
           await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
@@ -134,7 +172,12 @@ export function buildLangChainTools(ctx: ToolContext) {
               message: `I need your confirmation to create issue "${input.title}" in ${input.owner}/${input.repo}.`,
             });
           }
-          const result = { message: "Issue created (stub)", issue_url: "#" };
+          if (!ctx.githubToken) {
+            const err = { error: "GitHub not connected." };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const result = await executeGitHubCreateIssue(ctx.githubToken, input);
           await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
@@ -152,5 +195,92 @@ export function buildLangChainTools(ctx: ToolContext) {
     );
   }
 
+  if (isToolAvailable("github_create_repo", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("github_create_repo");
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "github_create_repo", input, needsConfirm
+          );
+          if (needsConfirm) {
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              message: `I need your confirmation to create repository "${input.name}"${input.private ? " (private)" : ""}.`,
+            });
+          }
+          if (!ctx.githubToken) {
+            const err = { error: "GitHub not connected." };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const result = await executeGitHubCreateRepo(ctx.githubToken, input);
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
+        },
+        {
+          name: "github_create_repo",
+          description: "Creates a new GitHub repository for the authenticated user. Requires confirmation.",
+          schema: z.object({
+            name: z.string(),
+            description: z.string().optional().default(""),
+            private: z.boolean().optional().default(false),
+          }),
+        }
+      )
+    );
+  }
+
   return tools;
+}
+
+const GITHUB_API = "https://api.github.com";
+
+function githubApi(token: string, path: string, init?: RequestInit) {
+  return fetch(`${GITHUB_API}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
+export async function executeGitHubCreateIssue(
+  token: string,
+  input: { owner: string; repo: string; title: string; body?: string }
+) {
+  const res = await githubApi(token, `/repos/${input.owner}/${input.repo}/issues`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: input.title, body: input.body ?? "" }),
+  });
+  if (!res.ok) {
+    return { error: `GitHub API error: ${res.status}` };
+  }
+  const issue = await res.json();
+  return { message: "Issue created", issue_url: issue.html_url, number: issue.number };
+}
+
+export async function executeGitHubCreateRepo(
+  token: string,
+  input: { name: string; description?: string; private?: boolean }
+) {
+  const res = await githubApi(token, "/user/repos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description ?? "",
+      private: input.private ?? false,
+    }),
+  });
+  if (!res.ok) {
+    return { error: `GitHub API error: ${res.status}` };
+  }
+  const repo = await res.json();
+  return { message: "Repository created", html_url: repo.html_url, full_name: repo.full_name };
 }

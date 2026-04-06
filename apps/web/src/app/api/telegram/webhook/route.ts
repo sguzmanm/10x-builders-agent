@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@agents/db";
-import { runAgent } from "@agents/agent";
+import { createServerClient, decryptToken, getIntegrationWithTokens } from "@agents/db";
+import { runAgent, executeGitHubCreateIssue, executeGitHubCreateRepo } from "@agents/agent";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
@@ -73,6 +73,18 @@ export async function POST(request: Request) {
   if (update.callback_query) {
     const cb = update.callback_query;
     const [action, toolCallId] = cb.data.split(":");
+    const chatId = cb.message.chat.id;
+
+    if (action === "reject" && toolCallId) {
+      await db
+        .from("tool_calls")
+        .update({ status: "rejected", finished_at: new Date().toISOString() })
+        .eq("id", toolCallId)
+        .eq("status", "pending_confirmation");
+      await answerCallbackQuery(cb.id, "Rechazado");
+      await sendTelegramMessage(chatId, "Acción cancelada.");
+      return NextResponse.json({ ok: true });
+    }
 
     if (action === "approve" && toolCallId) {
       await db
@@ -81,15 +93,62 @@ export async function POST(request: Request) {
         .eq("id", toolCallId)
         .eq("status", "pending_confirmation");
       await answerCallbackQuery(cb.id, "Aprobado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción aprobada. Ejecutando...");
-    } else if (action === "reject" && toolCallId) {
-      await db
+      await sendTelegramMessage(chatId, "Acción aprobada. Ejecutando...");
+
+      const { data: toolCall } = await db
         .from("tool_calls")
-        .update({ status: "rejected" })
+        .select("*, agent_sessions!inner(user_id)")
         .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
-      await answerCallbackQuery(cb.id, "Rechazado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción cancelada.");
+        .single();
+
+      if (toolCall) {
+        const userId = (toolCall as Record<string, unknown> & { agent_sessions: { user_id: string } })
+          .agent_sessions.user_id;
+        const toolName = toolCall.tool_name as string;
+        const args = toolCall.arguments_json as Record<string, string>;
+
+        const ghIntegration = await getIntegrationWithTokens(db, userId, "github");
+        let githubToken: string | undefined;
+        if (ghIntegration) {
+          try { githubToken = decryptToken(ghIntegration.encrypted_tokens); } catch { /* ignore */ }
+        }
+
+        if (!githubToken) {
+          await db.from("tool_calls").update({
+            status: "failed",
+            result_json: { error: "GitHub not connected" },
+            finished_at: new Date().toISOString(),
+          }).eq("id", toolCallId);
+          await sendTelegramMessage(chatId, "Error: GitHub no está conectado.");
+        } else {
+          let result: Record<string, unknown>;
+          if (toolName === "github_create_issue") {
+            result = await executeGitHubCreateIssue(githubToken, {
+              owner: args.owner, repo: args.repo, title: args.title, body: args.body,
+            });
+          } else if (toolName === "github_create_repo") {
+            result = await executeGitHubCreateRepo(githubToken, {
+              name: args.name, description: args.description, private: args.private === "true",
+            });
+          } else {
+            result = { error: `Unknown tool: ${toolName}` };
+          }
+
+          const hasError = "error" in result;
+          await db.from("tool_calls").update({
+            status: hasError ? "failed" : "executed",
+            result_json: result,
+            finished_at: new Date().toISOString(),
+          }).eq("id", toolCallId);
+
+          const msg = hasError
+            ? `Error: ${result.error}`
+            : (result.message as string) ?? "Acción ejecutada.";
+          await sendTelegramMessage(chatId, msg);
+        }
+      }
+
+      return NextResponse.json({ ok: true });
     }
 
     return NextResponse.json({ ok: true });
@@ -224,6 +283,18 @@ export async function POST(request: Request) {
     .eq("user_id", userId)
     .eq("status", "active");
 
+  const ghIntegration = integrations?.find(
+    (i: Record<string, unknown>) => i.provider === "github"
+  );
+  let githubToken: string | undefined;
+  if (ghIntegration?.encrypted_tokens) {
+    try {
+      githubToken = decryptToken(ghIntegration.encrypted_tokens as string);
+    } catch {
+      // token decryption failed
+    }
+  }
+
   try {
     const result = await runAgent({
       message: text,
@@ -246,6 +317,7 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      githubToken,
     });
 
     // Check if response contains a pending confirmation

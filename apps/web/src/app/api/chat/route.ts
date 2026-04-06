@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient } from "@agents/db";
+import { createServerClient, decryptToken } from "@agents/db";
 import { runAgent } from "@agents/agent";
 
 export async function POST(request: Request) {
@@ -34,6 +34,18 @@ export async function POST(request: Request) {
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "active");
+
+    const ghIntegration = integrations?.find(
+      (i: Record<string, unknown>) => i.provider === "github"
+    );
+    let githubToken: string | undefined;
+    if (ghIntegration?.encrypted_tokens) {
+      try {
+        githubToken = decryptToken(ghIntegration.encrypted_tokens as string);
+      } catch {
+        // token decryption failed — treat as disconnected
+      }
+    }
 
     let session = await supabase
       .from("agent_sessions")
@@ -86,6 +98,7 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      githubToken,
     });
 
     const pendingConfirmation = result.response.includes("pending_confirmation")

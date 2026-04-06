@@ -18,6 +18,7 @@ export interface UserIntegration {
   id: string;
   user_id: string;
   provider: string;
+  encrypted_tokens?: string;
   scopes: string[];
   status: "active" | "revoked" | "expired";
   created_at: string;

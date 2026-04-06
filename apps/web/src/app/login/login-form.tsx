@@ -26,12 +26,15 @@ export function LoginForm() {
       password,
     });
 
+    console.log("error", error);
+
     if (error) {
       setError(error.message);
       setLoading(false);
       return;
     }
 
+    console.log("user logged in");
     router.push("/");
     router.refresh();
   }

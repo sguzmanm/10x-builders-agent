@@ -19,6 +19,10 @@ const GraphState = Annotation.Root({
   sessionId: Annotation<string>(),
   userId: Annotation<string>(),
   systemPrompt: Annotation<string>(),
+  hasPendingConfirmation: Annotation<boolean>({
+    reducer: (_prev, next) => next,
+    default: () => false,
+  }),
 });
 
 export interface AgentInput {
@@ -29,6 +33,7 @@ export interface AgentInput {
   db: DbClient;
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
+  githubToken?: string;
 }
 
 export interface AgentOutput {
@@ -39,7 +44,7 @@ export interface AgentOutput {
 const MAX_TOOL_ITERATIONS = 6;
 
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
-  const { message, userId, sessionId, systemPrompt, db, enabledTools, integrations } = input;
+  const { message, userId, sessionId, systemPrompt, db, enabledTools, integrations, githubToken } = input;
 
   const model = createChatModel();
   const lcTools = buildLangChainTools({
@@ -48,6 +53,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     sessionId,
     enabledTools,
     integrations,
+    githubToken,
   });
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
@@ -80,16 +86,24 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
     const { ToolMessage } = await import("@langchain/core/messages");
     const results: BaseMessage[] = [];
+    let foundPending = false;
     for (const tc of lastMsg.tool_calls) {
       const matchingTool = lcTools.find((t) => t.name === tc.name);
       toolCallNames.push(tc.name);
       if (matchingTool) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = await (matchingTool as any).invoke(tc.args);
-        results.push(new ToolMessage({ content: String(result), tool_call_id: tc.id! }));
+        const resultStr = String(result);
+        results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
+        try {
+          const parsed = JSON.parse(resultStr);
+          if (parsed.pending_confirmation) foundPending = true;
+        } catch {
+          // not JSON
+        }
       }
     }
-    return { messages: results };
+    return { messages: results, hasPendingConfirmation: foundPending };
   }
 
   function shouldContinue(state: typeof GraphState.State): string {
@@ -104,6 +118,11 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     return "end";
   }
 
+  function afterTools(state: typeof GraphState.State): string {
+    if (state.hasPendingConfirmation) return "end";
+    return "agent";
+  }
+
   const graph = new StateGraph(GraphState)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
@@ -112,7 +131,10 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       tools: "tools",
       end: "__end__",
     })
-    .addEdge("tools", "agent");
+    .addConditionalEdges("tools", afterTools, {
+      agent: "agent",
+      end: "__end__",
+    });
 
   const checkpointer = new MemorySaver();
   const app = graph.compile({ checkpointer });
@@ -128,11 +150,23 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     { configurable: { thread_id: sessionId } }
   );
 
-  const lastMessage = finalState.messages[finalState.messages.length - 1];
-  const responseText =
-    typeof lastMessage.content === "string"
-      ? lastMessage.content
-      : JSON.stringify(lastMessage.content);
+  let responseText: string;
+
+  if (finalState.hasPendingConfirmation) {
+    const toolMessages = finalState.messages.filter(
+      (m: BaseMessage) => m.constructor.name === "ToolMessage"
+    );
+    const lastToolMsg = toolMessages[toolMessages.length - 1];
+    responseText = typeof lastToolMsg?.content === "string"
+      ? lastToolMsg.content
+      : JSON.stringify(lastToolMsg?.content ?? "");
+  } else {
+    const lastMessage = finalState.messages[finalState.messages.length - 1];
+    responseText =
+      typeof lastMessage.content === "string"
+        ? lastMessage.content
+        : JSON.stringify(lastMessage.content);
+  }
 
   await addMessage(db, sessionId, "assistant", responseText);
 

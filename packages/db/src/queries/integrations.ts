@@ -36,6 +36,22 @@ export async function upsertIntegration(
   return data as UserIntegration;
 }
 
+export async function getIntegrationWithTokens(
+  db: DbClient,
+  userId: string,
+  provider: string
+) {
+  const { data, error } = await db
+    .from("user_integrations")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("provider", provider)
+    .eq("status", "active")
+    .single();
+  if (error && error.code !== "PGRST116") throw error;
+  return data as (UserIntegration & { encrypted_tokens: string }) | null;
+}
+
 export async function revokeIntegration(
   db: DbClient,
   userId: string,
