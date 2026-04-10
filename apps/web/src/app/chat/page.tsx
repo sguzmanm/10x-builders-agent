@@ -26,6 +26,7 @@ export default async function ChatPage() {
     .single();
 
   let sessionMessages: Array<{ role: string; content: string; created_at: string }> = [];
+  let initialPendingConfirmation: { tool_call_id: string; message: string } | null = null;
   if (messages?.id) {
     const { data } = await supabase
       .from("agent_messages")
@@ -34,6 +35,26 @@ export default async function ChatPage() {
       .order("created_at", { ascending: true })
       .limit(50);
     sessionMessages = data ?? [];
+
+    const { data: pendingToolCalls } = await supabase
+      .from("tool_calls")
+      .select("id, tool_name, arguments_json")
+      .eq("session_id", messages.id)
+      .eq("status", "pending_confirmation")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const pending = pendingToolCalls?.[0] as
+      | { id: string; tool_name: string; arguments_json: Record<string, unknown> }
+      | undefined;
+    if (pending) {
+      const humanMessage = pending.tool_name === "github_create_issue"
+        ? `I need your confirmation to create issue "${String(pending.arguments_json?.title ?? "")}" in ${String(pending.arguments_json?.owner ?? "")}/${String(pending.arguments_json?.repo ?? "")}.`
+        : pending.tool_name === "github_create_repo"
+          ? `I need your confirmation to create repository "${String(pending.arguments_json?.name ?? "")}"${pending.arguments_json?.private === true ? " (private)" : ""}.`
+          : `I need your confirmation to execute "${pending.tool_name}".`;
+      initialPendingConfirmation = { tool_call_id: pending.id, message: humanMessage };
+    }
   }
 
   return (
@@ -68,6 +89,7 @@ export default async function ChatPage() {
       <ChatInterface
         agentName={profile.agent_name as string}
         initialMessages={sessionMessages}
+        initialPendingConfirmation={initialPendingConfirmation}
       />
     </div>
   );

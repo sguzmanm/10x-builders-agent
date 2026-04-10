@@ -16,13 +16,14 @@ interface PendingConfirmation {
 interface Props {
   agentName: string;
   initialMessages: Message[];
+  initialPendingConfirmation: PendingConfirmation | null;
 }
 
-export function ChatInterface({ agentName, initialMessages }: Props) {
+export function ChatInterface({ agentName, initialMessages, initialPendingConfirmation }: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [pending, setPending] = useState<PendingConfirmation | null>(null);
+  const [pending, setPending] = useState<PendingConfirmation | null>(initialPendingConfirmation);
   const [confirming, setConfirming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -85,18 +86,18 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
 
       const data = await res.json();
 
-      if (action === "reject") {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: "Acción cancelada." },
-        ]);
-      } else if (data.result) {
-        const resultMsg = data.result.error
-          ? `Error: ${data.result.error}`
-          : data.result.message ?? "Acción ejecutada correctamente.";
+      if (data.response) {
+        const resultMsg = typeof data.response === "string"
+          ? data.response
+          : "Acción ejecutada correctamente.";
         setMessages((prev) => [
           ...prev,
           { role: "assistant", content: resultMsg },
+        ]);
+      } else if (action === "reject") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "Acción cancelada." },
         ]);
       }
     } catch {

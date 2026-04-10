@@ -2,7 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
-import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
+import { TOOL_CATALOG } from "./catalog";
 import { createToolCall, updateToolCallStatus } from "@agents/db";
 
 interface ToolContext {
@@ -161,24 +161,10 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
-          const needsConfirm = toolRequiresConfirmation("github_create_issue");
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_create_issue", input, needsConfirm
-          );
-          if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
-              tool_call_id: record.id,
-              message: `I need your confirmation to create issue "${input.title}" in ${input.owner}/${input.repo}.`,
-            });
-          }
           if (!ctx.githubToken) {
-            const err = { error: "GitHub not connected." };
-            await updateToolCallStatus(ctx.db, record.id, "failed", err);
-            return JSON.stringify(err);
+            return JSON.stringify({ error: "GitHub not connected." });
           }
           const result = await executeGitHubCreateIssue(ctx.githubToken, input);
-          await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
         {
@@ -199,24 +185,10 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
-          const needsConfirm = toolRequiresConfirmation("github_create_repo");
-          const record = await createToolCall(
-            ctx.db, ctx.sessionId, "github_create_repo", input, needsConfirm
-          );
-          if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
-              tool_call_id: record.id,
-              message: `I need your confirmation to create repository "${input.name}"${input.private ? " (private)" : ""}.`,
-            });
-          }
           if (!ctx.githubToken) {
-            const err = { error: "GitHub not connected." };
-            await updateToolCallStatus(ctx.db, record.id, "failed", err);
-            return JSON.stringify(err);
+            return JSON.stringify({ error: "GitHub not connected." });
           }
           const result = await executeGitHubCreateRepo(ctx.githubToken, input);
-          await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
         {

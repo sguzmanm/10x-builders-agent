@@ -101,13 +101,9 @@ export async function POST(request: Request) {
       githubToken,
     });
 
-    const pendingConfirmation = result.response.includes("pending_confirmation")
-      ? JSON.parse(result.response)
-      : null;
-
     return NextResponse.json({
-      response: pendingConfirmation ? null : result.response,
-      pendingConfirmation,
+      response: result.pendingConfirmation ? null : result.response,
+      pendingConfirmation: result.pendingConfirmation ?? null,
       toolCalls: result.toolCalls,
     });
   } catch (error) {

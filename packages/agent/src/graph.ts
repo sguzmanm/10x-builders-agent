@@ -1,15 +1,23 @@
-import { StateGraph, Annotation, MemorySaver } from "@langchain/langgraph";
+import { StateGraph, Annotation, Command, interrupt } from "@langchain/langgraph";
 import {
   HumanMessage,
   AIMessage,
   SystemMessage,
+  ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { createChatModel } from "./model";
 import { buildLangChainTools } from "./tools/adapters";
-import { getSessionMessages, addMessage } from "@agents/db";
+import {
+  addMessage,
+  createToolCall,
+  findExistingPendingToolCall,
+  updateToolCallStatus,
+} from "@agents/db";
+import { toolRequiresConfirmation } from "./tools/catalog";
+import { getCheckpointer } from "./checkpointer";
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -19,14 +27,10 @@ const GraphState = Annotation.Root({
   sessionId: Annotation<string>(),
   userId: Annotation<string>(),
   systemPrompt: Annotation<string>(),
-  hasPendingConfirmation: Annotation<boolean>({
-    reducer: (_prev, next) => next,
-    default: () => false,
-  }),
 });
 
 export interface AgentInput {
-  message: string;
+  message?: string;
   userId: string;
   sessionId: string;
   systemPrompt: string;
@@ -34,17 +38,39 @@ export interface AgentInput {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  resumeDecision?: "approve" | "reject";
+}
+
+export interface PendingConfirmationPayload {
+  tool_call_id: string;
+  tool_name: string;
+  message: string;
+  args: Record<string, unknown>;
 }
 
 export interface AgentOutput {
   response: string;
   toolCalls: string[];
+  pendingConfirmation?: PendingConfirmationPayload | null;
 }
 
 const MAX_TOOL_ITERATIONS = 6;
 
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
-  const { message, userId, sessionId, systemPrompt, db, enabledTools, integrations, githubToken } = input;
+  const {
+    message,
+    userId,
+    sessionId,
+    systemPrompt,
+    db,
+    enabledTools,
+    integrations,
+    githubToken,
+    resumeDecision,
+  } = input;
+  if (!message && !resumeDecision) {
+    throw new Error("runAgent requires either message or resumeDecision");
+  }
 
   const model = createChatModel();
   const lcTools = buildLangChainTools({
@@ -57,22 +83,19 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   });
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
-
-  const history = await getSessionMessages(db, sessionId, 30);
-  const priorMessages: BaseMessage[] = history.map((m) => {
-    if (m.role === "user") return new HumanMessage(m.content);
-    if (m.role === "assistant") return new AIMessage(m.content);
-    return new HumanMessage(m.content);
-  });
-
-  await addMessage(db, sessionId, "user", message);
+  if (message) {
+    await addMessage(db, sessionId, "user", message);
+  }
 
   const toolCallNames: string[] = [];
 
   async function agentNode(
     state: typeof GraphState.State
   ): Promise<Partial<typeof GraphState.State>> {
-    const response = await modelWithTools.invoke(state.messages);
+    const response = await modelWithTools.invoke([
+      new SystemMessage(state.systemPrompt),
+      ...state.messages,
+    ]);
     return { messages: [response] };
   }
 
@@ -84,26 +107,71 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       return {};
     }
 
-    const { ToolMessage } = await import("@langchain/core/messages");
     const results: BaseMessage[] = [];
-    let foundPending = false;
     for (const tc of lastMsg.tool_calls) {
       const matchingTool = lcTools.find((t) => t.name === tc.name);
       toolCallNames.push(tc.name);
-      if (matchingTool) {
+      if (!matchingTool) {
+        results.push(
+          new ToolMessage({
+            content: JSON.stringify({ error: `Tool not found: ${tc.name}` }),
+            tool_call_id: tc.id!,
+          })
+        );
+        continue;
+      }
+
+      const needsConfirmation = toolRequiresConfirmation(tc.name);
+      if (needsConfirmation) {
+        const existing = await findExistingPendingToolCall(db, state.sessionId, tc.name);
+        const record = existing
+          ?? await createToolCall(db, state.sessionId, tc.name, tc.args, true);
+        const decision = interrupt<PendingConfirmationPayload, "approve" | "reject">({
+          tool_call_id: record.id,
+          tool_name: tc.name,
+          message: buildConfirmationMessage(tc.name, tc.args),
+          args: tc.args,
+        });
+
+        if (decision === "reject") {
+          await updateToolCallStatus(db, record.id, "rejected", {
+            message: "Action rejected by user",
+          });
+          results.push(
+            new ToolMessage({
+              content: JSON.stringify({ message: "Action cancelled by user." }),
+              tool_call_id: tc.id!,
+            })
+          );
+          continue;
+        }
+
+        await updateToolCallStatus(db, record.id, "approved");
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = await (matchingTool as any).invoke(tc.args);
         const resultStr = String(result);
-        results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
+        let parsedResult: Record<string, unknown> = { result: resultStr };
         try {
-          const parsed = JSON.parse(resultStr);
-          if (parsed.pending_confirmation) foundPending = true;
+          parsedResult = JSON.parse(resultStr) as Record<string, unknown>;
         } catch {
-          // not JSON
+          // Keep stringified fallback
         }
+        await updateToolCallStatus(
+          db,
+          record.id,
+          parsedResult.error ? "failed" : "executed",
+          parsedResult
+        );
+        results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
+        continue;
       }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await (matchingTool as any).invoke(tc.args);
+      const resultStr = String(result);
+      results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
     }
-    return { messages: results, hasPendingConfirmation: foundPending };
+    return { messages: results };
   }
 
   function shouldContinue(state: typeof GraphState.State): string {
@@ -118,11 +186,6 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     return "end";
   }
 
-  function afterTools(state: typeof GraphState.State): string {
-    if (state.hasPendingConfirmation) return "end";
-    return "agent";
-  }
-
   const graph = new StateGraph(GraphState)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
@@ -131,44 +194,76 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       tools: "tools",
       end: "__end__",
     })
-    .addConditionalEdges("tools", afterTools, {
-      agent: "agent",
-      end: "__end__",
-    });
+    .addEdge("tools", "agent");
 
-  const checkpointer = new MemorySaver();
+  const checkpointer = await getCheckpointer();
   const app = graph.compile({ checkpointer });
-
-  const initialMessages: BaseMessage[] = [
-    new SystemMessage(systemPrompt),
-    ...priorMessages,
-    new HumanMessage(message),
-  ];
-
-  const finalState = await app.invoke(
-    { messages: initialMessages, sessionId, userId, systemPrompt },
-    { configurable: { thread_id: sessionId } }
-  );
+  const invokeConfig = { configurable: { thread_id: sessionId } };
+  const finalState = resumeDecision
+    ? await app.invoke(new Command({ resume: resumeDecision }), invokeConfig)
+    : await app.invoke(
+      {
+        messages: [new HumanMessage(message as string)],
+        sessionId,
+        userId,
+        systemPrompt,
+      },
+      invokeConfig
+    );
 
   let responseText: string;
-
-  if (finalState.hasPendingConfirmation) {
-    const toolMessages = finalState.messages.filter(
-      (m: BaseMessage) => m.constructor.name === "ToolMessage"
-    );
-    const lastToolMsg = toolMessages[toolMessages.length - 1];
-    responseText = typeof lastToolMsg?.content === "string"
-      ? lastToolMsg.content
-      : JSON.stringify(lastToolMsg?.content ?? "");
-  } else {
-    const lastMessage = finalState.messages[finalState.messages.length - 1];
-    responseText =
-      typeof lastMessage.content === "string"
-        ? lastMessage.content
-        : JSON.stringify(lastMessage.content);
+  const interrupts = (finalState as Record<string, unknown>).__interrupt__;
+  if (Array.isArray(interrupts) && interrupts.length > 0) {
+    const firstInterrupt = interrupts[0] as { value?: PendingConfirmationPayload };
+    const payload = firstInterrupt?.value;
+    if (payload) {
+      await addMessage(
+        db,
+        sessionId,
+        "assistant",
+        payload.message,
+        {
+          tool_call_id: payload.tool_call_id,
+          structured_payload: payload as unknown as Record<string, unknown>,
+        }
+      );
+      return {
+        response: payload.message,
+        toolCalls: toolCallNames,
+        pendingConfirmation: payload,
+      };
+    }
   }
+
+  const finalMessages = Array.isArray(finalState.messages) ? finalState.messages : [];
+  const lastMessage = finalMessages[finalMessages.length - 1];
+  if (!lastMessage) {
+    const errorMessage = resumeDecision
+      ? "Graph resumed without messages. Checkpoint state missing or stale thread."
+      : "Agent finished without messages.";
+    throw new Error(errorMessage);
+  }
+  responseText =
+    typeof lastMessage.content === "string"
+      ? lastMessage.content
+      : JSON.stringify(lastMessage.content);
 
   await addMessage(db, sessionId, "assistant", responseText);
 
-  return { response: responseText, toolCalls: toolCallNames };
+  return { response: responseText, toolCalls: toolCallNames, pendingConfirmation: null };
+}
+
+function buildConfirmationMessage(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "github_create_issue") {
+    const owner = String(args.owner ?? "");
+    const repo = String(args.repo ?? "");
+    const title = String(args.title ?? "");
+    return `I need your confirmation to create issue "${title}" in ${owner}/${repo}.`;
+  }
+  if (toolName === "github_create_repo") {
+    const name = String(args.name ?? "");
+    const isPrivate = args.private === true;
+    return `I need your confirmation to create repository "${name}"${isPrivate ? " (private)" : ""}.`;
+  }
+  return `I need your confirmation to execute "${toolName}".`;
 }

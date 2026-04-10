@@ -5,10 +5,7 @@ import {
   decryptToken,
   getIntegrationWithTokens,
 } from "@agents/db";
-import {
-  executeGitHubCreateIssue,
-  executeGitHubCreateRepo,
-} from "@agents/agent";
+import { runAgent } from "@agents/agent";
 
 export async function POST(request: Request) {
   try {
@@ -44,72 +41,58 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (action === "reject") {
-      await db
-        .from("tool_calls")
-        .update({ status: "rejected", finished_at: new Date().toISOString() })
-        .eq("id", toolCallId);
-      return NextResponse.json({ ok: true, status: "rejected" });
-    }
+    const { data: profile } = await db
+      .from("profiles")
+      .select("agent_system_prompt")
+      .eq("id", user.id)
+      .single();
 
-    await db
-      .from("tool_calls")
-      .update({ status: "approved" })
-      .eq("id", toolCallId);
+    const { data: toolSettings } = await db
+      .from("user_tool_settings")
+      .select("*")
+      .eq("user_id", user.id);
 
-    const toolName = toolCall.tool_name as string;
-    const args = toolCall.arguments_json as Record<string, string>;
+    const { data: integrations } = await db
+      .from("user_integrations")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("status", "active");
 
+    let githubToken: string | undefined;
     const ghIntegration = await getIntegrationWithTokens(db, user.id, "github");
-    if (!ghIntegration) {
-      await db
-        .from("tool_calls")
-        .update({ status: "failed", result_json: { error: "GitHub not connected" }, finished_at: new Date().toISOString() })
-        .eq("id", toolCallId);
-      return NextResponse.json({ ok: false, error: "GitHub not connected" });
+    if (ghIntegration) {
+      try {
+        githubToken = decryptToken(ghIntegration.encrypted_tokens);
+      } catch {
+        // token decryption failed — treat as disconnected
+      }
     }
 
-    let githubToken: string;
-    try {
-      githubToken = decryptToken(ghIntegration.encrypted_tokens);
-    } catch {
-      await db
-        .from("tool_calls")
-        .update({ status: "failed", result_json: { error: "Token decryption failed" }, finished_at: new Date().toISOString() })
-        .eq("id", toolCallId);
-      return NextResponse.json({ ok: false, error: "Token decryption failed" });
-    }
+    const result = await runAgent({
+      resumeDecision: action === "approve" ? "approve" : "reject",
+      userId: user.id,
+      sessionId: toolCall.session_id as string,
+      systemPrompt: (profile?.agent_system_prompt as string) ?? "Eres un asistente útil.",
+      db,
+      enabledTools: (toolSettings ?? []).map((t: Record<string, unknown>) => ({
+        id: t.id as string,
+        user_id: t.user_id as string,
+        tool_id: t.tool_id as string,
+        enabled: t.enabled as boolean,
+        config_json: (t.config_json as Record<string, unknown>) ?? {},
+      })),
+      integrations: (integrations ?? []).map((i: Record<string, unknown>) => ({
+        id: i.id as string,
+        user_id: i.user_id as string,
+        provider: i.provider as string,
+        scopes: (i.scopes as string[]) ?? [],
+        status: i.status as "active" | "revoked" | "expired",
+        created_at: i.created_at as string,
+      })),
+      githubToken,
+    });
 
-    let result: Record<string, unknown>;
-
-    if (toolName === "github_create_issue") {
-      result = await executeGitHubCreateIssue(githubToken, {
-        owner: args.owner,
-        repo: args.repo,
-        title: args.title,
-        body: args.body,
-      });
-    } else if (toolName === "github_create_repo") {
-      result = await executeGitHubCreateRepo(githubToken, {
-        name: args.name,
-        description: args.description,
-        private: args.private === "true",
-      });
-    } else {
-      result = { error: `Unknown tool: ${toolName}` };
-    }
-
-    const hasError = "error" in result;
-    await db
-      .from("tool_calls")
-      .update({
-        status: hasError ? "failed" : "executed",
-        result_json: result,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", toolCallId);
-
-    return NextResponse.json({ ok: !hasError, result });
+    return NextResponse.json({ ok: true, response: result.response });
   } catch (error) {
     console.error("Confirm API error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

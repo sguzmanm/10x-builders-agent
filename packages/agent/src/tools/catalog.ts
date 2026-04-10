@@ -5,7 +5,7 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     id: "get_user_preferences",
     name: "get_user_preferences",
     description: "Returns the current user preferences and agent configuration.",
-    risk: "low",
+    risk: "high",
     parameters_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -78,7 +78,7 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["name"],
     },
   },
-  {
+  /*{
     id: "places_search",
     name: "places_search",
     description: "Searches for places matching a text query and returns names, addresses, and ratings.",
@@ -106,7 +106,7 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       },
       required: ["place_id"],
     },
-  },
+  },*/
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {

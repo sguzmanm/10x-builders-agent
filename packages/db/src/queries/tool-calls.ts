@@ -31,7 +31,7 @@ export async function updateToolCallStatus(
 ) {
   const update: Record<string, unknown> = { status };
   if (resultJson) update.result_json = resultJson;
-  if (status === "executed" || status === "failed") {
+  if (status === "executed" || status === "failed" || status === "rejected") {
     update.finished_at = new Date().toISOString();
   }
   const { error } = await db
@@ -48,5 +48,22 @@ export async function getPendingToolCall(db: DbClient, toolCallId: string) {
     .eq("id", toolCallId)
     .eq("status", "pending_confirmation")
     .single();
+  return data as ToolCall | null;
+}
+
+export async function findExistingPendingToolCall(
+  db: DbClient,
+  sessionId: string,
+  toolName: string
+): Promise<ToolCall | null> {
+  const { data } = await db
+    .from("tool_calls")
+    .select("*")
+    .eq("session_id", sessionId)
+    .eq("tool_name", toolName)
+    .eq("status", "pending_confirmation")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   return data as ToolCall | null;
 }
