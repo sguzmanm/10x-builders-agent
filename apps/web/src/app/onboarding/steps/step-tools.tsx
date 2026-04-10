@@ -43,6 +43,13 @@ const AVAILABLE_TOOLS = [
     risk: "medium" as const,
     requiresIntegration: "github",
   },
+  {
+    id: "bash",
+    name: "Bash (servidor)",
+    description: "Ejecuta comandos bash en el servidor (terminal lógica por sesión; requiere confirmación).",
+    risk: "high" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {

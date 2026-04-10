@@ -5,7 +5,7 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     id: "get_user_preferences",
     name: "get_user_preferences",
     description: "Returns the current user preferences and agent configuration.",
-    risk: "high",
+    risk: "low",
     parameters_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -14,6 +14,26 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     description: "Lists all tools the user has currently enabled.",
     risk: "low",
     parameters_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    id: "bash",
+    name: "bash",
+    description:
+      "Use esta herramienta cuando se quieran ejecutar comandos bash en el sistema operativo. " +
+      "Ejecuta comandos en una terminal lógica por sesión (reutiliza el directorio de trabajo por id de terminal). " +
+      "El entorno es Unix (p. ej. macOS en desarrollo). Riesgo alto: requiere confirmación.",
+    risk: "high",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        terminal: {
+          type: "string",
+          description: "Identificador de la terminal lógica (p. ej. default, frontend).",
+        },
+        prompt: { type: "string", description: "Comando o script bash a ejecutar." },
+      },
+      required: ["terminal", "prompt"],
+    },
   },
   {
     id: "github_list_repos",

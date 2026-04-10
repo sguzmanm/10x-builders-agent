@@ -3,7 +3,13 @@ import { z } from "zod";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG } from "./catalog";
-import { createToolCall, updateToolCallStatus } from "@agents/db";
+import {
+  createToolCall,
+  updateToolCallStatus,
+  getBashTerminalCwd,
+  setBashTerminalCwd,
+} from "@agents/db";
+import { runBashCommand } from "./bash-runner";
 
 interface ToolContext {
   db: DbClient;
@@ -198,6 +204,66 @@ export function buildLangChainTools(ctx: ToolContext) {
             name: z.string(),
             description: z.string().optional().default(""),
             private: z.boolean().optional().default(false),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("bash", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const terminalId = input.terminal.trim() || "default";
+          const persisted = await getBashTerminalCwd(ctx.db, ctx.sessionId, terminalId);
+          const cwd =
+            persisted ??
+            (process.env.AGENT_BASH_INITIAL_CWD && process.env.AGENT_BASH_INITIAL_CWD.length > 0
+              ? process.env.AGENT_BASH_INITIAL_CWD
+              : process.cwd());
+
+          const raw = await runBashCommand({ cwd, prompt: input.prompt });
+          if (raw.error) {
+            return JSON.stringify({
+              error: raw.error,
+              stdout: raw.stdout,
+              stderr: raw.stderr,
+              exit_code: raw.exit_code,
+            });
+          }
+
+          if (raw.exit_code === 0 && raw.cwd_after) {
+            try {
+              await setBashTerminalCwd(ctx.db, ctx.sessionId, terminalId, raw.cwd_after);
+            } catch (e) {
+              return JSON.stringify({
+                error: e instanceof Error ? e.message : "Failed to persist terminal cwd",
+                stdout: raw.stdout,
+                stderr: raw.stderr,
+                exit_code: raw.exit_code,
+                cwd: raw.cwd_after,
+                truncated: raw.truncated,
+              });
+            }
+          }
+
+          return JSON.stringify({
+            stdout: raw.stdout,
+            stderr: raw.stderr,
+            exit_code: raw.exit_code,
+            cwd: raw.cwd_after,
+            truncated: raw.truncated,
+          });
+        },
+        {
+          name: "bash",
+          description:
+            "Use esta herramienta cuando se quieran ejecutar comandos bash en el sistema operativo. " +
+            "Ejecuta comandos en una terminal lógica por sesión; reutiliza el directorio de trabajo por id de terminal. " +
+            "Entorno Unix (p. ej. macOS en desarrollo). Riesgo alto: requiere confirmación.",
+          schema: z.object({
+            terminal: z.string().describe("Identificador de la terminal lógica (p. ej. default)."),
+            prompt: z.string().describe("Comando o script bash a ejecutar."),
           }),
         }
       )

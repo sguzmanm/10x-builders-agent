@@ -265,5 +265,11 @@ function buildConfirmationMessage(toolName: string, args: Record<string, unknown
     const isPrivate = args.private === true;
     return `I need your confirmation to create repository "${name}"${isPrivate ? " (private)" : ""}.`;
   }
+  if (toolName === "bash") {
+    const terminal = String(args.terminal ?? "").trim() || "default";
+    const prompt = String(args.prompt ?? "");
+    const preview = prompt.length > 400 ? `${prompt.slice(0, 400)}…` : prompt;
+    return `I need your confirmation to run bash in terminal "${terminal}":\n\n${preview}`;
+  }
   return `I need your confirmation to execute "${toolName}".`;
 }

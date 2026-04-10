@@ -39,6 +39,7 @@ export interface AgentSession {
   status: "active" | "closed";
   budget_tokens_used: number;
   budget_tokens_limit: number;
+  tool_state?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
