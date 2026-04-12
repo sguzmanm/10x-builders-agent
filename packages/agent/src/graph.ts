@@ -271,5 +271,19 @@ function buildConfirmationMessage(toolName: string, args: Record<string, unknown
     const preview = prompt.length > 400 ? `${prompt.slice(0, 400)}…` : prompt;
     return `I need your confirmation to run bash in terminal "${terminal}":\n\n${preview}`;
   }
+  if (toolName === "write_file") {
+    const path = String(args.path ?? "");
+    const content = String(args.content ?? "");
+    const preview = content.length > 300 ? `${content.slice(0, 300)}…` : content;
+    return `Necesito tu confirmacion para crear el archivo "${path}" con este contenido inicial:\n\n${preview}`;
+  }
+  if (toolName === "edit_file") {
+    const path = String(args.path ?? "");
+    const oldString = String(args.old_string ?? "");
+    const newString = String(args.new_string ?? "");
+    const oldPreview = oldString.length > 200 ? `${oldString.slice(0, 200)}…` : oldString;
+    const newPreview = newString.length > 200 ? `${newString.slice(0, 200)}…` : newString;
+    return `Necesito tu confirmacion para editar "${path}".\n\nBuscar:\n${oldPreview}\n\nReemplazar por:\n${newPreview}`;
+  }
   return `I need your confirmation to execute "${toolName}".`;
 }

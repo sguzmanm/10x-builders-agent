@@ -10,6 +10,7 @@ import {
   setBashTerminalCwd,
 } from "@agents/db";
 import { runBashCommand } from "./bash-runner";
+import { executeReadFile, executeWriteFile, executeEditFile } from "./fileTools";
 
 interface ToolContext {
   db: DbClient;
@@ -75,6 +76,76 @@ export function buildLangChainTools(ctx: ToolContext) {
           name: "list_enabled_tools",
           description: "Lists all tools the user has currently enabled.",
           schema: z.object({}),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("read_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const result = await executeReadFile(input);
+          return JSON.stringify(result);
+        },
+        {
+          name: "read_file",
+          description:
+            "Read an existing UTF-8 text file under the workspace root without modifying it.",
+          schema: z.object({
+            path: z.string().min(1).max(1000),
+            // Models often send offset 0 for "from the start"; treat as omitted (1-based line 1).
+            offset: z.preprocess((val) => {
+              if (val === undefined || val === null) return undefined;
+              const n =
+                typeof val === "string" ? Number.parseInt(val, 10) : Number(val);
+              if (!Number.isFinite(n)) return val;
+              if (n === 0) return undefined;
+              return n;
+            }, z.number().int().min(1).optional()),
+            limit: z.number().int().min(1).max(10000).optional(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("write_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const result = await executeWriteFile(input);
+          return JSON.stringify(result);
+        },
+        {
+          name: "write_file",
+          description:
+            "Create a new UTF-8 file under the workspace root. Fails if the file already exists.",
+          schema: z.object({
+            path: z.string().min(1).max(1000),
+            content: z.string().max(2_000_000),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("edit_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const result = await executeEditFile(input);
+          return JSON.stringify(result);
+        },
+        {
+          name: "edit_file",
+          description:
+            "Edit an existing UTF-8 file by replacing exactly one occurrence of old_string with new_string.",
+          schema: z.object({
+            path: z.string().min(1).max(1000),
+            old_string: z.string().max(2_000_000),
+            new_string: z.string().max(2_000_000),
+          }),
         }
       )
     );

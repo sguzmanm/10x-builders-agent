@@ -36,6 +36,87 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     },
   },
   {
+    id: "read_file",
+    name: "read_file",
+    description:
+      "Reads an existing UTF-8 text file under the workspace root. " +
+      "Use this to inspect code or text without changing files. " +
+      "Do not use this to write files or list directories. " +
+      "Parameters: path (relative), optional offset (1-based start line), optional limit (max lines). " +
+      "Returns structured JSON with content and line metadata.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative path under the workspace root.",
+        },
+        offset: {
+          type: "number",
+          description: "Optional 1-based start line (line 1 is first). Use 0 or omit to read from the beginning.",
+        },
+        limit: {
+          type: "number",
+          description: "Optional maximum number of lines to return.",
+        },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    id: "write_file",
+    name: "write_file",
+    description:
+      "Creates a new UTF-8 file under the workspace root with full content. " +
+      "Fails if the file already exists; use edit_file for updates. " +
+      "Requires confirmation because it mutates disk. " +
+      "Returns structured JSON with bytes written or explicit error.",
+    risk: "high",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative file path under the workspace root.",
+        },
+        content: {
+          type: "string",
+          description: "Full UTF-8 file content to create.",
+        },
+      },
+      required: ["path", "content"],
+    },
+  },
+  {
+    id: "edit_file",
+    name: "edit_file",
+    description:
+      "Edits an existing UTF-8 file under the workspace root by replacing exactly one occurrence of old_string with new_string. " +
+      "Fails when old_string matches zero or multiple times. " +
+      "Requires confirmation because it mutates disk. " +
+      "Returns structured JSON with replacement count or explicit error.",
+    risk: "high",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative file path under the workspace root.",
+        },
+        old_string: {
+          type: "string",
+          description: "Exact substring to replace (must match once).",
+        },
+        new_string: {
+          type: "string",
+          description: "New substring content.",
+        },
+      },
+      required: ["path", "old_string", "new_string"],
+    },
+  },
+  {
     id: "github_list_repos",
     name: "github_list_repos",
     description: "Lists the user's GitHub repositories.",

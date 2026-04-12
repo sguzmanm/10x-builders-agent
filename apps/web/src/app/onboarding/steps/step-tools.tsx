@@ -50,6 +50,27 @@ const AVAILABLE_TOOLS = [
     risk: "high" as const,
     requiresIntegration: null,
   },
+  {
+    id: "read_file",
+    name: "Leer archivo",
+    description: "Lee archivos de texto dentro del workspace del agente (sin escribir).",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "write_file",
+    name: "Crear archivo",
+    description: "Crea archivos nuevos dentro del workspace del agente (requiere confirmación).",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "edit_file",
+    name: "Editar archivo",
+    description: "Reemplaza una coincidencia exacta en un archivo existente (requiere confirmación).",
+    risk: "high" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {
