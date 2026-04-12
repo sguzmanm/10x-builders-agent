@@ -84,3 +84,35 @@ export interface ToolDefinition {
   requires_integration?: string;
   parameters_schema: Record<string, unknown>;
 }
+
+export type ScheduleType = "one_time" | "recurring";
+export type ScheduledTaskStatus = "active" | "running" | "completed" | "failed" | "cancelled";
+
+export interface ScheduledTask {
+  id: string;
+  user_id: string;
+  prompt: string;
+  schedule_type: ScheduleType;
+  run_at?: string | null;
+  cron_expr?: string | null;
+  timezone: string;
+  status: ScheduledTaskStatus;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ScheduledTaskRunStatus = "running" | "completed" | "failed";
+
+export interface ScheduledTaskRun {
+  id: string;
+  task_id: string;
+  status: ScheduledTaskRunStatus;
+  started_at: string;
+  finished_at?: string | null;
+  error?: string | null;
+  agent_session_id?: string | null;
+  notified: boolean;
+  notify_skipped_reason?: string | null;
+}

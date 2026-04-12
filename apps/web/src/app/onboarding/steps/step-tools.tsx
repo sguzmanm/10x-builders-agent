@@ -71,6 +71,13 @@ const AVAILABLE_TOOLS = [
     risk: "high" as const,
     requiresIntegration: null,
   },
+  {
+    id: "schedule_task",
+    name: "Programar tarea",
+    description: "Crea tareas programadas (únicas o recurrentes con cron) que el agente ejecuta automáticamente y notifica por Telegram. Requiere confirmación.",
+    risk: "medium" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {

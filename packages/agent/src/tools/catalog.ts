@@ -179,6 +179,44 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["name"],
     },
   },
+  {
+    id: "schedule_task",
+    name: "schedule_task",
+    description:
+      "Programa una tarea para que el agente la ejecute automáticamente en el futuro. " +
+      "Soporta ejecución única (one_time) con fecha/hora exacta, o recurrente (recurring) con expresión cron estándar de 5 campos. " +
+      "El agente recibirá el prompt indicado y lo ejecutará de forma autónoma en el momento programado. " +
+      "Se notificará el resultado por Telegram si está vinculado. " +
+      "Requiere confirmación del usuario antes de crear la tarea.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Instrucción o tarea que el agente debe ejecutar en el momento programado.",
+        },
+        schedule_type: {
+          type: "string",
+          enum: ["one_time", "recurring"],
+          description: "Tipo de programación: one_time para ejecución única, recurring para recurrente.",
+        },
+        run_at: {
+          type: "string",
+          description: "Fecha y hora ISO 8601 para ejecución única (requerido si schedule_type=one_time).",
+        },
+        cron_expr: {
+          type: "string",
+          description: "Expresión cron de 5 campos (requerido si schedule_type=recurring). Ejemplo: '0 9 * * 1' = cada lunes a las 9am.",
+        },
+        timezone: {
+          type: "string",
+          description: "Zona horaria IANA (p. ej. 'America/Bogota'). Por defecto UTC.",
+        },
+      },
+      required: ["prompt", "schedule_type"],
+    },
+  },
   /*{
     id: "places_search",
     name: "places_search",

@@ -26,6 +26,7 @@ const TOOL_IDS = [
   "github_create_repo",
   "places_search",
   "places_detail",
+  "schedule_task",
 ];
 
 export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected, githubScopes }: Props) {

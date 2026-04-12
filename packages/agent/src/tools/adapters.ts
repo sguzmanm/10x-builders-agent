@@ -449,6 +449,82 @@ export function buildLangChainTools(ctx: ToolContext) {
     );
   }
 
+  if (isToolAvailable("schedule_task", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const { createScheduledTask } = await import("@agents/db");
+          const { CronExpressionParser } = await import("cron-parser");
+
+          let nextRunAt: string;
+          try {
+            if (input.schedule_type === "one_time") {
+              if (!input.run_at) {
+                return JSON.stringify({ error: "run_at es requerido para tareas de ejecución única." });
+              }
+              nextRunAt = new Date(input.run_at).toISOString();
+            } else {
+              if (!input.cron_expr) {
+                return JSON.stringify({ error: "cron_expr es requerido para tareas recurrentes." });
+              }
+              const interval = CronExpressionParser.parse(input.cron_expr, {
+                tz: input.timezone ?? "UTC",
+              });
+              nextRunAt = interval.next().toDate().toISOString();
+            }
+          } catch (e) {
+            return JSON.stringify({ error: `Parámetros de programación inválidos: ${(e as Error).message}` });
+          }
+
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "schedule_task", input, true
+          );
+          try {
+            const task = await createScheduledTask(ctx.db, {
+              userId: ctx.userId,
+              prompt: input.prompt,
+              scheduleType: input.schedule_type,
+              runAt: input.run_at,
+              cronExpr: input.cron_expr,
+              timezone: input.timezone ?? "UTC",
+              nextRunAt,
+            });
+            const result = {
+              task_id: task.id,
+              schedule_type: task.schedule_type,
+              next_run_at: task.next_run_at,
+              status: task.status,
+              message:
+                task.schedule_type === "one_time"
+                  ? `Tarea programada para ${task.next_run_at}.`
+                  : `Tarea recurrente creada. Próxima ejecución: ${task.next_run_at}.`,
+            };
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = { error: `Error creando tarea programada: ${(e as Error).message}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+        },
+        {
+          name: "schedule_task",
+          description:
+            "Programa una tarea para que el agente la ejecute automáticamente en el futuro. " +
+            "Soporta ejecución única (one_time) o recurrente (recurring) con expresión cron. " +
+            "Requiere confirmación del usuario.",
+          schema: z.object({
+            prompt: z.string().min(1).describe("Instrucción que el agente ejecutará en el momento programado."),
+            schedule_type: z.enum(["one_time", "recurring"]),
+            run_at: z.string().optional().describe("ISO 8601 datetime para ejecución única."),
+            cron_expr: z.string().optional().describe("Expresión cron 5 campos para tareas recurrentes."),
+            timezone: z.string().optional().describe("Zona horaria IANA, por defecto UTC."),
+          }),
+        }
+      )
+    );
+  }
+
   return tools;
 }
 

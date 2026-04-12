@@ -56,6 +56,17 @@ export interface AgentOutput {
 
 const MAX_TOOL_ITERATIONS = 6;
 
+const TIMEZONE = "America/Bogota";
+
+function buildSystemMessage(basePrompt: string): string {
+  const now = new Date().toLocaleString("es-CO", {
+    timeZone: TIMEZONE,
+    dateStyle: "full",
+    timeStyle: "long",
+  });
+  return `${basePrompt}\n\nFecha y hora actual: ${now} (${TIMEZONE}).`;
+}
+
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const {
     message,
@@ -93,7 +104,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     state: typeof GraphState.State
   ): Promise<Partial<typeof GraphState.State>> {
     const response = await modelWithTools.invoke([
-      new SystemMessage(state.systemPrompt),
+      new SystemMessage(buildSystemMessage(state.systemPrompt)),
       ...state.messages,
     ]);
     return { messages: [response] };
