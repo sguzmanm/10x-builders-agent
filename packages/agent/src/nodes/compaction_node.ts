@@ -11,7 +11,7 @@ import {
 import { ChatOpenAI } from "@langchain/openai";
 
 const CONTEXT_WINDOW_TOKENS = 128_000;
-const COMPACTION_THRESHOLD = 0.001;
+const COMPACTION_THRESHOLD = 0.8;
 const KEEP_LAST_TOOL_RESULTS = 5;
 const MAX_CIRCUIT_BREAKER = 3;
 

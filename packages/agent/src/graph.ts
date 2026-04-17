@@ -19,6 +19,7 @@ import {
 import { toolRequiresConfirmation } from "./tools/catalog";
 import { getCheckpointer } from "./checkpointer";
 import { createCompactionNode } from "./nodes/compaction_node";
+import { createMemoryInjectionNode } from "./nodes/memory_injection_node";
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -106,6 +107,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const toolCallNames: string[] = [];
   const consecutiveFailures = { value: 0 };
   const compactionNode = createCompactionNode(consecutiveFailures);
+  const memoryInjectionNode = createMemoryInjectionNode({ db, userId });
 
   async function agentNode(
     state: typeof GraphState.State
@@ -205,10 +207,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const graph = new StateGraph(GraphState)
+    .addNode("memory_injection", memoryInjectionNode)
     .addNode("compaction", compactionNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
-    .addEdge("__start__", "compaction")
+    .addEdge("__start__", "memory_injection")
+    .addEdge("memory_injection", "compaction")
     .addEdge("compaction", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",

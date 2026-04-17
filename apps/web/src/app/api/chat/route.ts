@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServerClient, decryptToken } from "@agents/db";
-import { runAgent } from "@agents/agent";
+import { runAgent, flushSessionMemory } from "@agents/agent";
 
 export async function POST(request: Request) {
   try {
@@ -100,6 +100,10 @@ export async function POST(request: Request) {
       })),
       githubToken,
     });
+
+    if (!result.pendingConfirmation) {
+      flushSessionMemory({ db, userId: user.id, sessionId: session.id }).catch(console.error);
+    }
 
     return NextResponse.json({
       response: result.pendingConfirmation ? null : result.response,
