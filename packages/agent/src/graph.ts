@@ -1,4 +1,4 @@
-import { StateGraph, Annotation, Command, interrupt } from "@langchain/langgraph";
+import { StateGraph, Annotation, Command, interrupt, messagesStateReducer } from "@langchain/langgraph";
 import {
   HumanMessage,
   AIMessage,
@@ -18,15 +18,20 @@ import {
 } from "@agents/db";
 import { toolRequiresConfirmation } from "./tools/catalog";
 import { getCheckpointer } from "./checkpointer";
+import { createCompactionNode } from "./nodes/compaction_node";
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
-    reducer: (prev, next) => [...prev, ...next],
+    reducer: messagesStateReducer,
     default: () => [],
   }),
   sessionId: Annotation<string>(),
   userId: Annotation<string>(),
   systemPrompt: Annotation<string>(),
+  compactionCount: Annotation<number>({
+    reducer: (_prev, next) => next,
+    default: () => 0,
+  }),
 });
 
 export interface AgentInput {
@@ -99,6 +104,8 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const toolCallNames: string[] = [];
+  const consecutiveFailures = { value: 0 };
+  const compactionNode = createCompactionNode(consecutiveFailures);
 
   async function agentNode(
     state: typeof GraphState.State
@@ -198,14 +205,16 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const graph = new StateGraph(GraphState)
+    .addNode("compaction", compactionNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
-    .addEdge("__start__", "agent")
+    .addEdge("__start__", "compaction")
+    .addEdge("compaction", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
       end: "__end__",
     })
-    .addEdge("tools", "agent");
+    .addEdge("tools", "compaction");
 
   const checkpointer = await getCheckpointer();
   const app = graph.compile({ checkpointer });
