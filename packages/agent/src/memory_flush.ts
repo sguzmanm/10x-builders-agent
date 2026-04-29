@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import type { DbClient } from "@agents/db";
 import { getSessionMessages, saveMemory, searchMemories } from "@agents/db";
 import { generateEmbedding } from "./embeddings";
+import { createLangfuseConfig } from "./observability";
 
 interface MemoryItem {
   type: "episodic" | "semantic" | "procedural";
@@ -58,9 +59,16 @@ export async function flushSessionMemory(params: {
 
   let rawResponse: string;
   try {
-    const response = await model.invoke([
-      { role: "user", content: buildExtractionPrompt(transcript) },
-    ]);
+    const response = await model.invoke(
+      [{ role: "user", content: buildExtractionPrompt(transcript) }],
+      createLangfuseConfig({
+        runName: "agent.memory_flush",
+        userId,
+        sessionId,
+        tags: ["memory", "background"],
+        metadata: { messageCount: messages.length },
+      })
+    );
     rawResponse =
       typeof response.content === "string"
         ? response.content

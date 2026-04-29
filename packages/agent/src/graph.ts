@@ -1,4 +1,5 @@
 import { StateGraph, Annotation, Command, interrupt, messagesStateReducer } from "@langchain/langgraph";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   HumanMessage,
   AIMessage,
@@ -20,6 +21,7 @@ import { toolRequiresConfirmation } from "./tools/catalog";
 import { getCheckpointer } from "./checkpointer";
 import { createCompactionNode } from "./nodes/compaction_node";
 import { createMemoryInjectionNode } from "./nodes/memory_injection_node";
+import { createLangfuseConfig } from "./observability";
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -110,17 +112,19 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const memoryInjectionNode = createMemoryInjectionNode({ db, userId });
 
   async function agentNode(
-    state: typeof GraphState.State
+    state: typeof GraphState.State,
+    config?: RunnableConfig
   ): Promise<Partial<typeof GraphState.State>> {
     const response = await modelWithTools.invoke([
       new SystemMessage(buildSystemMessage(state.systemPrompt)),
       ...state.messages,
-    ]);
+    ], config);
     return { messages: [response] };
   }
 
   async function toolExecutorNode(
-    state: typeof GraphState.State
+    state: typeof GraphState.State,
+    config?: RunnableConfig
   ): Promise<Partial<typeof GraphState.State>> {
     const lastMsg = state.messages[state.messages.length - 1];
     if (!(lastMsg instanceof AIMessage) || !lastMsg.tool_calls?.length) {
@@ -168,7 +172,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
         await updateToolCallStatus(db, record.id, "approved");
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (matchingTool as any).invoke(tc.args);
+        const result = await (matchingTool as any).invoke(tc.args, config);
         const resultStr = String(result);
         let parsedResult: Record<string, unknown> = { result: resultStr };
         try {
@@ -187,7 +191,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await (matchingTool as any).invoke(tc.args);
+      const result = await (matchingTool as any).invoke(tc.args, config);
       const resultStr = String(result);
       results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
     }
@@ -222,7 +226,20 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
   const checkpointer = await getCheckpointer();
   const app = graph.compile({ checkpointer });
-  const invokeConfig = { configurable: { thread_id: sessionId } };
+  const invokeConfig: RunnableConfig = {
+    configurable: { thread_id: sessionId },
+    ...createLangfuseConfig({
+      runName: resumeDecision ? "agent.resume" : "agent.message",
+      userId,
+      sessionId,
+      tags: [resumeDecision ? "resume" : "message"],
+      metadata: {
+        toolCount: lcTools.length,
+        hasGithubIntegration: Boolean(githubToken),
+        resumeDecision: resumeDecision ?? null,
+      },
+    }),
+  };
   const finalState = resumeDecision
     ? await app.invoke(new Command({ resume: resumeDecision }), invokeConfig)
     : await app.invoke(

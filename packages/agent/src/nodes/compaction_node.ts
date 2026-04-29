@@ -9,6 +9,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
+import type { RunnableConfig } from "@langchain/core/runnables";
 
 const CONTEXT_WINDOW_TOKENS = 128_000;
 const COMPACTION_THRESHOLD = 0.8;
@@ -116,7 +117,10 @@ const COMPACTION_SYSTEM_PROMPT = `You are a conversation summarizer. Analyze the
 
 Be comprehensive but concise. Preserve exact file paths, error messages, variable names, command outputs, and all technical details critical for continuity.`;
 
-async function llmCompact(messages: BaseMessage[]): Promise<string> {
+async function llmCompact(
+  messages: BaseMessage[],
+  config?: RunnableConfig
+): Promise<string> {
   const model = createCompactionModel();
 
   const conversationText = messages
@@ -133,12 +137,15 @@ async function llmCompact(messages: BaseMessage[]): Promise<string> {
     })
     .join("\n\n");
 
-  const response = await model.invoke([
-    new SystemMessage(COMPACTION_SYSTEM_PROMPT),
-    new HumanMessage(
-      `Please summarize this conversation:\n\n${conversationText}`
-    ),
-  ]);
+  const response = await model.invoke(
+    [
+      new SystemMessage(COMPACTION_SYSTEM_PROMPT),
+      new HumanMessage(
+        `Please summarize this conversation:\n\n${conversationText}`
+      ),
+    ],
+    config
+  );
 
   let summary =
     typeof response.content === "string"
@@ -152,7 +159,8 @@ async function llmCompact(messages: BaseMessage[]): Promise<string> {
 
 export function createCompactionNode(failuresRef: { value: number }) {
   return async function compactionNode(
-    state: CompactionState
+    state: CompactionState,
+    config?: RunnableConfig
   ): Promise<Partial<CompactionState>> {
     const { messages, sessionId } = state;
 
@@ -217,7 +225,7 @@ export function createCompactionNode(failuresRef: { value: number }) {
     });
 
     try {
-      const summary = await llmCompact(effectiveMessages);
+      const summary = await llmCompact(effectiveMessages, config);
 
       // Remove every existing message (by ID) and inject the compact summary
       const removeAll = effectiveMessages
